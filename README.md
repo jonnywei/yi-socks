@@ -1,1 +1,1 @@
-socks4 socks4a socks5 http proxy all in one
+support socks4 socks4a socks5 web proxy all in one
