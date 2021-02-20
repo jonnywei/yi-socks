@@ -1,6 +1,7 @@
 package socks5
 
 import (
+	"bufio"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -8,17 +9,16 @@ import (
 	"log"
 	"net"
 	"strconv"
+	"strings"
 )
 
 const (
-	CMD_CONNECT = 0X01
-	CMD_BIND  = 0X02
-	CMD_UDP = 0X03
-	ATYPE_IPV4 = 0X01
-	ATYPE_DOMAINNAME = 0X03
-	ATYPE_IPV6 = 0X04
-
-
+	CMD_CONNECT      = 0x01
+	CMD_BIND         = 0x02
+	CMD_UDP          = 0x03
+	ATYPE_IPV4       = 0x01
+	ATYPE_DOMAINNAME = 0x03
+	ATYPE_IPV6       = 0x04
 )
 
 type SocksServer struct {
@@ -26,44 +26,40 @@ type SocksServer struct {
 	sockIp  string
 	port    int
 	udpIp   string //udp associate ip
-	udpPort int // udp associate address
+	udpPort int    // udp associate address
 }
 
-func NewSocksServer(socksIp string, port int) * SocksServer {
+func NewSocksServer(socksIp string, port int) *SocksServer {
 	socksServer := SocksServer{
-		sockIp: socksIp,
-		port:   port,
-		udpIp: socksIp,
+		sockIp:  socksIp,
+		port:    port,
+		udpIp:   socksIp,
 		udpPort: port,
-
 	}
 	return &socksServer
 }
 
 // socks4 socks5 server
-func (s * SocksServer) ListenAndServe(){
+func (s *SocksServer) ListenAndServe() {
 	go func() {
-		udpServer := NewUdpServer(s.udpIp,s.udpPort)
+		udpServer := NewUdpServer(s.udpIp, s.udpPort)
 		udpServer.Listen()
 	}()
 	s.listenSocksServer()
 }
 
+func (s *SocksServer) listenSocksServer() error {
 
-
-
-func (s * SocksServer) listenSocksServer() error{
-
-	s.tcpAddr, _ = net.ResolveTCPAddr("tcp",s.sockIp+":"+ strconv.Itoa(s.port))
-	conn,err := net.ListenTCP("tcp",s.tcpAddr)
+	s.tcpAddr, _ = net.ResolveTCPAddr("tcp", s.sockIp+":"+strconv.Itoa(s.port))
+	conn, err := net.ListenTCP("tcp", s.tcpAddr)
 	if err != nil {
-		log.Println("connect error",err)
+		log.Println("connect error", err)
 		return err
 	}
-	fmt.Println("Listen tcp:"+s.tcpAddr.String())
+	fmt.Println("Listen tcp:" + s.tcpAddr.String())
 
-	for{
-		c,err := conn.Accept()
+	for {
+		c, err := conn.Accept()
 		if err != nil {
 			log.Fatal("accept error", err)
 			break
@@ -76,66 +72,73 @@ func (s * SocksServer) listenSocksServer() error{
 	return errors.New("socks server stop")
 }
 
-func  (s * SocksServer)  handleConnection(con net.Conn){
+func (s *SocksServer) handleConnection(con net.Conn) {
 	fmt.Println(con.RemoteAddr().String() + " request for service!")
 
-	ver,err := s.handleVersion(con)
+	ver, err := s.handleVersion(con)
 	if err != nil {
 		con.Close()
-		log.Println(con.RemoteAddr().String()+" error",err)
+		log.Println(con.RemoteAddr().String()+" error", err)
 		return
 	}
 	if ver == 4 {
 		s.handleSocks4(con)
 		return
 	}
-	err = s.handleAuth(con)
-	if err != nil {
-		con.Close()
-		log.Println(con.RemoteAddr().String()+" error",err)
-		return
-	}
+	if ver == 5 {
+		err = s.handleAuth(con)
+		if err != nil {
+			con.Close()
+			log.Println(con.RemoteAddr().String()+" error", err)
+			return
+		}
 
-	err = s.handleRequest(con)
+		err = s.handleRequest(con)
+		if err != nil {
+			log.Println(con.RemoteAddr().String()+" error", err)
+			con.Close()
+			return
+		}
+		return
+	}
+	//default handle http
+	err = s.handleWebProxy(con, ver)
 	if err != nil {
-		log.Println(con.RemoteAddr().String()+" error",err)
+		log.Println(con.RemoteAddr().String()+" error", err)
 		con.Close()
 		return
 	}
+	return
+
 }
 
+//http CONNECT first char is C
+//CONNECT streamline.t-mobile.com:443 HTTP/1.1
+func (s *SocksServer) handleVersion(con net.Conn) (byte, error) {
 
-
-func  (s * SocksServer)  handleVersion(con net.Conn) (int, error){
-
-	buf :=make([]byte, 1)
-	n,err := io.ReadFull(con,buf[:1])
-	if n != 1{
+	buf := make([]byte, 1)
+	n, err := io.ReadFull(con, buf[:1])
+	if n != 1 {
 		return 0, errors.New("read header :err" + err.Error())
 	}
-	ver := int(buf[0])
-	if ver != 5 && ver != 4 {
-		return 0, errors.New("bad version")
-	}
-	return ver ,nil
+	ver := buf[0]
+	return ver, nil
 }
 
+func (s *SocksServer) handleSocks4(con net.Conn) error {
 
-
-func  (s * SocksServer)  handleSocks4(con net.Conn) error{
-
-	buf :=make([]byte, 256)
-	n,err := io.ReadFull(con,buf[:1])
-	if n != 1{
+	buf := make([]byte, 256)
+	n, err := io.ReadFull(con, buf[:1])
+	if n != 1 {
 		return errors.New("read header :err" + err.Error())
 	}
-	cmd :=  int(buf[0])
+	cmd := int(buf[0])
 
-	n,err = io.ReadFull(con,buf[:2])
+	n, err = io.ReadFull(con, buf[:2])
 	port := binary.BigEndian.Uint16(buf[:2])
 
-	n,err = io.ReadFull(con, buf[:4])
-	addr :=  net.IP(buf[:4]).String()
+	n, err = io.ReadFull(con, buf[:4])
+	addr := net.IP(buf[:4]).String()
 
 	/**
 	  IP address 0.0.0.x, with x nonzero,
@@ -147,27 +150,27 @@ func  (s * SocksServer)  handleSocks4(con net.Conn) error{
 	This is used for both "connect" and "bind" requests.
 	*/
 	var useDomain = false
-	if buf[0] == 0X00 && buf[1] == 0X00 && buf[2] == 0X00  && buf[3]!= 0X00 {
+	if buf[0] == 0x00 && buf[1] == 0x00 && buf[2] == 0x00 && buf[3] != 0x00 {
 		useDomain = true
 	}
 
 	for {
-		n,err = io.ReadFull(con, buf[:1])
+		n, err = io.ReadFull(con, buf[:1])
 		if err != nil {
 			return errors.New("read userid error :" + err.Error())
 		}
-		if buf[0] == 0X00 {
+		if buf[0] == 0x00 {
 			break
 		}
 	}
 	if useDomain {
-		var i =0
+		var i = 0
 		for {
-			n,err = io.ReadFull(con, buf[i:i+1])
+			n, err = io.ReadFull(con, buf[i:i+1])
 			if err != nil {
 				return errors.New("read userid error :" + err.Error())
 			}
-			if buf[i] == 0X00 {
+			if buf[i] == 0x00 {
 				break
 			}
 			i++
@@ -176,22 +179,18 @@ func  (s * SocksServer)  handleSocks4(con net.Conn) error{
 	}
 
 	if cmd == CMD_CONNECT {
-		return s.handleSock4ConnectCmd(con,addr,port)
-	}else {
+		return s.handleSock4ConnectCmd(con, addr, port)
+	} else {
 		return errors.New("not support cmd")
 	}
 	return nil
 
 }
 
+func (s *SocksServer) handleSock4ConnectCmd(con net.Conn, addr string, port uint16) error {
 
-
-
-
-func  (s * SocksServer)  handleSock4ConnectCmd(con net.Conn ,addr string, port uint16) error{
-
-	destAddrPort := fmt.Sprintf("%s:%d",addr,port)
-	dest,err := net.Dial("tcp",destAddrPort)
+	destAddrPort := fmt.Sprintf("%s:%d", addr, port)
+	dest, err := net.Dial("tcp", destAddrPort)
 
 	/**
 	The SOCKS server uses the client information to decide whether the
@@ -220,12 +219,12 @@ func  (s * SocksServer)  handleSock4ConnectCmd(con net.Conn ,addr string, port u
 	    destination IP, as above – the ip:port the client should bind to
 	*/
 
-	if  err != nil {
-		con.Write([]byte{0x00,0x5B,0x00,0x00,0,0,0,0})
+	if err != nil {
+		con.Write([]byte{0x00, 0x5B, 0x00, 0x00, 0, 0, 0, 0})
 		return errors.New("connect dist error :" + err.Error())
 	}
 
-	_,err = con.Write([]byte{0x00,0x5A,0x00,0x00,0,0,0,0})
+	_, err = con.Write([]byte{0x00, 0x5A, 0x00, 0x00, 0, 0, 0, 0})
 	if err != nil {
 		return errors.New("write  response error:" + err.Error())
 	}
@@ -233,32 +232,31 @@ func  (s * SocksServer)  handleSock4ConnectCmd(con net.Conn ,addr string, port u
 	forward := func(src net.Conn, dest net.Conn) {
 		defer src.Close()
 		defer dest.Close()
-		_,err := io.Copy(dest, src)
+		_, err := io.Copy(dest, src)
 		if err != nil {
 			log.Println(src.RemoteAddr().String(), err)
 		}
 	}
-	fmt.Println(con.RemoteAddr().String() +"-"+ dest.LocalAddr().String() +"-"+  dest.RemoteAddr().String()+ " connect established!")
+	fmt.Println(con.RemoteAddr().String() + "-" + dest.LocalAddr().String() + "-" + dest.RemoteAddr().String() + " connect established!")
 	go forward(con, dest)
 	go forward(dest, con)
-	return  nil
+	return nil
 }
 
+func (s *SocksServer) handleAuth(con net.Conn) error {
 
-func  (s * SocksServer)  handleAuth(con net.Conn) error{
-
-	buf :=make([]byte, 256)
-	n,err := io.ReadFull(con,buf[:1])
+	buf := make([]byte, 256)
+	n, err := io.ReadFull(con, buf[:1])
 	if n != 1 {
 		return errors.New("read header :err" + err.Error())
 	}
 	nmethods := int(buf[0])
-	n,err = io.ReadFull(con, buf[:nmethods])
+	n, err = io.ReadFull(con, buf[:nmethods])
 	if n != nmethods {
 		return errors.New("read methods error:" + err.Error())
 	}
 
-	n,err = con.Write([]byte{0x05,0x00})
+	n, err = con.Write([]byte{0x05, 0x00})
 	if n != 2 || err != nil {
 		return errors.New("write auth response error:" + err.Error())
 	}
@@ -290,51 +288,51 @@ func  (s * SocksServer)  handleAuth(con net.Conn) error{
          o  DST.ADDR       desired destination address
          o  DST.PORT desired destination port in network octet
             order
- */
+*/
 
-func  (s * SocksServer)  handleRequest(con net.Conn) error{
+func (s *SocksServer) handleRequest(con net.Conn) error {
 
-	buf :=make([]byte, 256)
-	n,err := io.ReadFull(con,buf[:3])
+	buf := make([]byte, 256)
+	n, err := io.ReadFull(con, buf[:3])
 	if n != 3 {
 		return errors.New("read connect header :err" + err.Error())
 	}
-	ver,cmd := int(buf[0]),int(buf[1])
+	ver, cmd := int(buf[0]), int(buf[1])
 	if ver != 5 {
 		return errors.New("bad version")
 	}
-	addr :=""
-	n,err = io.ReadFull(con, buf[:1])
+	addr := ""
+	n, err = io.ReadFull(con, buf[:1])
 	atype := buf[0]
-	if atype == ATYPE_IPV4{
-		n,err = io.ReadFull(con, buf[:4])
-		addr =  net.IP(buf[:4]).String()
-	}else if atype == ATYPE_DOMAINNAME{
-		n,err = io.ReadFull(con, buf[:1])
+	if atype == ATYPE_IPV4 {
+		n, err = io.ReadFull(con, buf[:4])
+		addr = net.IP(buf[:4]).String()
+	} else if atype == ATYPE_DOMAINNAME {
+		n, err = io.ReadFull(con, buf[:1])
 		addrLen := int(buf[0])
-		n,err = io.ReadFull(con, buf[:addrLen])
+		n, err = io.ReadFull(con, buf[:addrLen])
 		addr = string(buf[:addrLen])
-	}else if atype ==ATYPE_IPV6 {
-		n,err = io.ReadFull(con, buf[:16])
-		addr =   string('[') +  (net.IP(buf[:16]).String()) + string(']')
+	} else if atype == ATYPE_IPV6 {
+		n, err = io.ReadFull(con, buf[:16])
+		addr = string('[') + (net.IP(buf[:16]).String()) + string(']')
 		fmt.Println("ipv6:" + addr)
 	}
 
-	n,err = io.ReadFull(con, buf[:2])
+	n, err = io.ReadFull(con, buf[:2])
 	port := binary.BigEndian.Uint16(buf[:2])
 	if cmd == CMD_CONNECT {
-		return s.handleConnectCmd(con,addr,port)
-	}else if cmd == CMD_UDP {
-		return s.handleUdpCmd(con,addr,port)
+		return s.handleConnectCmd(con, addr, port)
+	} else if cmd == CMD_UDP {
+		return s.handleUdpCmd(con, addr, port)
 	} else {
 		return errors.New("not support cmd")
 	}
 	return nil
 }
 
-func  (s * SocksServer)  handleUdpCmd(con net.Conn ,addr string, port uint16) error{
+func (s *SocksServer) handleUdpCmd(con net.Conn, addr string, port uint16) error {
 
-	fmt.Printf("udp ASSOCIATE request %s:%d\n",addr,port)
+	fmt.Printf("udp ASSOCIATE request %s:%d\n", addr, port)
 	/**
 	The SOCKS request information is sent by the client as soon as it has
 	   established a connection to the SOCKS server, and completed the
@@ -387,22 +385,22 @@ func  (s * SocksServer)  handleUdpCmd(con net.Conn ,addr string, port uint16) er
 	   fields indicate the port number/address where the client MUST send
 	   UDP request messages to be relayed.
 	*/
-	udpAddr,_ := net.ResolveIPAddr("ip",s.udpIp)
+	udpAddr, _ := net.ResolveIPAddr("ip", s.udpIp)
 	hostByte := udpAddr.IP.To4()
 	portByte := make([]byte, 2)
 	binary.BigEndian.PutUint16(portByte, uint16(s.udpPort))
-	buf := append([]byte{0x05,0x00,0x00,0x01},hostByte...)
+	buf := append([]byte{0x05, 0x00, 0x00, 0x01}, hostByte...)
 	buf = append(buf, portByte...)
-	_,err := con.Write(buf)
+	_, err := con.Write(buf)
 	//_,err := con.Write([]byte{0x05,0x00,0x00,0x01,0x0a,0x14,0xb,0x71,0x0f,0xa0})
 	if err != nil {
 		return errors.New("write response error:" + err.Error())
 	}
 
-	forward := func(src net.Conn ) {
+	forward := func(src net.Conn) {
 		defer src.Close()
-		for{
-			_,err := io.ReadFull(src, make([]byte,100))
+		for {
+			_, err := io.ReadFull(src, make([]byte, 100))
 			if err != nil {
 				break
 			}
@@ -410,15 +408,13 @@ func  (s * SocksServer)  handleUdpCmd(con net.Conn ,addr string, port uint16) er
 	}
 
 	go forward(con)
-	return  nil
+	return nil
 }
 
+func (s *SocksServer) handleConnectCmd(con net.Conn, addr string, port uint16) error {
 
-func  (s * SocksServer)  handleConnectCmd(con net.Conn ,addr string, port uint16) error{
-
-
-	destAddrPort := fmt.Sprintf("%s:%d",addr,port)
-	dest,err := net.Dial("tcp",destAddrPort)
+	destAddrPort := fmt.Sprintf("%s:%d", addr, port)
+	dest, err := net.Dial("tcp", destAddrPort)
 
 	/**
 	The SOCKS request information is sent by the client as soon as it has
@@ -457,12 +453,12 @@ func  (s * SocksServer)  handleConnectCmd(con net.Conn ,addr string, port uint16
 	   Fields marked RESERVED (RSV) must be set to X'00'.
 	*/
 
-	if  err != nil {
-		con.Write([]byte{0x05,0x05,0x00,0x01,0,0,0,0,0,0})
+	if err != nil {
+		con.Write([]byte{0x05, 0x05, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
 		return errors.New("connect dist error :" + err.Error())
 	}
 
-	_,err = con.Write([]byte{0x05,0x00,0x00,0x01,0,0,0,0,0,0})
+	_, err = con.Write([]byte{0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
 	if err != nil {
 		return errors.New("write  response error:" + err.Error())
 	}
@@ -470,13 +466,135 @@ func  (s * SocksServer)  handleConnectCmd(con net.Conn ,addr string, port uint16
 	forward := func(src net.Conn, dest net.Conn) {
 		defer src.Close()
 		defer dest.Close()
-		_,err := io.Copy(dest, src)
+		_, err := io.Copy(dest, src)
 		if err != nil {
 			log.Println(src.RemoteAddr().String(), err)
 		}
 	}
-	fmt.Println(con.RemoteAddr().String() +"-"+ dest.LocalAddr().String() +"-"+  dest.RemoteAddr().String()+ " connect established!")
+	fmt.Println(con.RemoteAddr().String() + "-" + dest.LocalAddr().String() + "-" + dest.RemoteAddr().String() + " connect established!")
 	go forward(con, dest)
 	go forward(dest, con)
-	return  nil
+	return nil
+}
+
+func readString(conn net.Conn, delim byte) (string, error) {
+
+	buf := make([]byte, 1024)
+	i := 0
+	for {
+		current := i
+		_, err := conn.Read(buf[current : current+1])
+		i++
+		if err != nil {
+			fmt.Println(err.Error())
+			break
+		}
+		if buf[current] == delim {
+			break
+		}
+		if i == len(buf) {
+			break
+		}
+	}
+	return string(buf[:i]), nil
+}
+
+func (s *SocksServer) handleWebProxy(con net.Conn, firstc byte) error {
+
+	line, err := readString(con, '\n')
+	if err != nil {
+		return err
+	}
+	line = string(firstc) + line
+	fmt.Printf(line)
+	hostproto := strings.Split(line, " ")
+
+	method := hostproto[0]
+	host := hostproto[1]
+	proto := hostproto[2]
+
+	if method == "CONNECT" {
+		reader := bufio.NewReader(con)
+		shp := strings.Split(host, ":")
+		addr := shp[0]
+		port, _ := strconv.Atoi(shp[1])
+		//consume rest header
+		for {
+			line, err = reader.ReadString('\n')
+			if line == "\r\n" {
+				break
+			}
+		}
+		return s.handleHTTPConnectMethod(con, addr, uint16(port))
+	} else {
+
+		shp := strings.Index(host, "//")
+		lasti := strings.Index(host[shp+2:], "/")
+		addr := host[shp+2 : lasti+shp+2]
+		port := 80
+		newline := method + " " + host[lasti+shp+2:] + " " + proto
+		return s.handleHTTPProxy(con, addr, uint16(port), newline)
+	}
+	return nil
+
+}
+
+func (s *SocksServer) handleHTTPConnectMethod(con net.Conn, addr string, port uint16) error {
+
+	destAddrPort := fmt.Sprintf("%s:%d", addr, port)
+	dest, err := net.Dial("tcp", destAddrPort)
+	/**
+
+	 */
+	if err != nil {
+		con.Write([]byte("HTTP/1.1 404 Not Found\r\n\r\n"))
+		return errors.New("connect dist error :" + err.Error())
+	}
+	_, err = con.Write([]byte("HTTP/1.1 200 OK\r\n\r\n"))
+
+	if err != nil {
+		return errors.New("write  response error:" + err.Error())
+	}
+
+	forward := func(src net.Conn, dest net.Conn) {
+		defer src.Close()
+		defer dest.Close()
+		_, err := io.Copy(dest, src)
+		if err != nil {
+			log.Println(src.RemoteAddr().String(), err)
+		}
+	}
+	fmt.Println(con.RemoteAddr().String() + "-" + dest.LocalAddr().String() + "-" + dest.RemoteAddr().String() + " connect established!")
+	go forward(con, dest)
+	go forward(dest, con)
+	return nil
+}
+
+// 后续的request line都是全路径，某些服务器可能有问题
+
+func (s *SocksServer) handleHTTPProxy(con net.Conn, addr string, port uint16, line string) error {
+
+	destAddrPort := fmt.Sprintf("%s:%d", addr, port)
+	dest, err := net.Dial("tcp", destAddrPort)
+	/**
+	 */
+	if err != nil {
+		return errors.New("connect dist error :" + err.Error())
+	}
+	_, err = dest.Write([]byte(line))
+	if err != nil {
+		return errors.New("write  response error:" + err.Error())
+	}
+	forward := func(src net.Conn, dest net.Conn) {
+		defer src.Close()
+		defer dest.Close()
+		_, err := io.Copy(dest, src)
+		if err != nil {
+			log.Println(src.RemoteAddr().String(), err)
+		}
+	}
+	fmt.Println(con.RemoteAddr().String() + "-" + dest.LocalAddr().String() + "-" + dest.RemoteAddr().String() + " connect established!")
+	go forward(con, dest)
+	go forward(dest, con)
+	return nil
 }
