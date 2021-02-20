@@ -506,16 +506,16 @@ func (s *SocksServer) handleWebProxy(con net.Conn, firstc byte) error {
 		return err
 	}
 	line = string(firstc) + line
-	fmt.Printf(line)
-	hostproto := strings.Split(line, " ")
+	fmt.Printf("http proxy requestLine " + line)
+	requestLine := strings.Split(line, " ")
 
-	method := hostproto[0]
-	host := hostproto[1]
-	proto := hostproto[2]
+	method := requestLine[0]
+	requestTarget := requestLine[1]
+	version := requestLine[2]
 
 	if method == "CONNECT" {
 		reader := bufio.NewReader(con)
-		shp := strings.Split(host, ":")
+		shp := strings.Split(requestTarget, ":")
 		addr := shp[0]
 		port, _ := strconv.Atoi(shp[1])
 		//consume rest header
@@ -527,12 +527,17 @@ func (s *SocksServer) handleWebProxy(con net.Conn, firstc byte) error {
 		}
 		return s.handleHTTPConnectMethod(con, addr, uint16(port))
 	} else {
+		si := strings.Index(requestTarget, "//")
+		restUrl := requestTarget[si+2:]
+		ei := strings.Index(restUrl, "/")
 
-		shp := strings.Index(host, "//")
-		lasti := strings.Index(host[shp+2:], "/")
-		addr := host[shp+2 : lasti+shp+2]
+		as := strings.Split(restUrl[:ei], ":")
+		addr := as[0]
 		port := 80
-		newline := method + " " + host[lasti+shp+2:] + " " + proto
+		if len(as) == 2 {
+			port, _ = strconv.Atoi(as[1])
+		}
+		newline := method + " " + restUrl[ei:] + " " + version
 		return s.handleHTTPProxy(con, addr, uint16(port), newline)
 	}
 	return nil
