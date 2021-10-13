@@ -104,7 +104,7 @@ func (s *SocksServer) handleConnection(con net.Conn) {
 	//default handle http
 	err = s.handleWebProxy(con, ver)
 	if err != nil {
-		log.Println(con.RemoteAddr().String()+" error", err)
+		log.Println(con.RemoteAddr().String()+" http proxy error", err)
 		con.Close()
 		return
 	}
@@ -508,7 +508,9 @@ func (s *SocksServer) handleWebProxy(con net.Conn, firstc byte) error {
 	line = string(firstc) + line
 	fmt.Printf("http proxy requestLine " + line)
 	requestLine := strings.Split(line, " ")
-
+	if len(requestLine) < 3 {
+		return errors.New("request line error")
+	}
 	method := requestLine[0]
 	requestTarget := requestLine[1]
 	version := requestLine[2]
@@ -529,15 +531,22 @@ func (s *SocksServer) handleWebProxy(con net.Conn, firstc byte) error {
 	} else {
 		si := strings.Index(requestTarget, "//")
 		restUrl := requestTarget[si+2:]
-		ei := strings.Index(restUrl, "/")
-
-		as := strings.Split(restUrl[:ei], ":")
-		addr := as[0]
 		port := 80
+		ei := strings.Index(restUrl, "/")
+		url := "/"
+		hostPort := restUrl
+		if ei != -1 {
+			hostPort = restUrl[:ei]
+			url = restUrl[ei:]
+		}
+		as := strings.Split(hostPort, ":")
+		addr := as[0]
 		if len(as) == 2 {
 			port, _ = strconv.Atoi(as[1])
 		}
-		newline := method + " " + restUrl[ei:] + " " + version
+
+		newline := method + " " + url + " " + version
+		fmt.Printf("http proxy newline " + newline)
 		return s.handleHTTPProxy(con, addr, uint16(port), newline)
 	}
 	return nil
