@@ -523,6 +523,7 @@ func (s *SocksServer) handleWebProxy(con net.Conn, firstc byte) error {
 		//consume rest header
 		for {
 			line, err = reader.ReadString('\n')
+			fmt.Printf("rest:" + line)
 			if line == "\r\n" {
 				break
 			}
@@ -564,7 +565,7 @@ func (s *SocksServer) handleHTTPConnectMethod(con net.Conn, addr string, port ui
 		con.Write([]byte("HTTP/1.1 404 Not Found\r\n\r\n"))
 		return errors.New("connect dist error :" + err.Error())
 	}
-	_, err = con.Write([]byte("HTTP/1.1 200 OK\r\n\r\n"))
+	_, err = con.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
 
 	if err != nil {
 		return errors.New("write  response error:" + err.Error())
