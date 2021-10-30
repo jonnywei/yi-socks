@@ -562,7 +562,7 @@ func (s *SocksServer) handleHTTPConnectMethod(con net.Conn, addr string, port ui
 
 	 */
 	if err != nil {
-		con.Write([]byte("HTTP/1.1 404 Not Found\r\n\r\n"))
+		//con.Write([]byte("HTTP/1.1 404 Not Found\r\n\r\n"))
 		return errors.New("connect dist error :" + err.Error())
 	}
 	_, err = con.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
